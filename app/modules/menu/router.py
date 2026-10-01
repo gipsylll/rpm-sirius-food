@@ -1,14 +1,17 @@
 """
-Модуль управления меню столовой.
+Транспортный слой меню.
 
-В исходной MVP-версии содержит смешение слоёв.
+Принимает HTTP-запрос, выполняет техническую валидацию
+и переводит доменные исключения в HTTP-статусы.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import MenuItem
+from app.exceptions import BusinessRuleError, NotFoundError
+from app.modules.menu.repository import create_menu_repository
+from app.modules.menu.service import MenuService
 from app.schemas import MenuItemCreate, MenuItemUpdate
 
 router = APIRouter()
@@ -29,24 +32,15 @@ def create_menu_item(payload: MenuItemCreate, db: Session = Depends(get_db)):
             detail="Название блюда слишком короткое",
         )
 
-    # Бизнес-правило: название блюда должно быть уникальным.
-    existing = db.query(MenuItem).filter(MenuItem.name == payload.name).first()
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Блюдо с таким названием уже существует",
-        )
+    repository = create_menu_repository(db)
+    service = MenuService(repository)
 
-    new_item = MenuItem(
-        name=payload.name,
-        price=payload.price,
-        is_available=True,
-    )
-    db.add(new_item)
-    db.commit()
-    db.refresh(new_item)
+    try:
+        item_id = service.create_item(payload.name, payload.price)
+    except BusinessRuleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return {"status": "success", "item_id": new_item.id}
+    return {"status": "success", "item_id": item_id}
 
 
 @router.patch("/items/{item_id}")
@@ -55,28 +49,29 @@ def update_menu_item(
     payload: MenuItemUpdate,
     db: Session = Depends(get_db),
 ):
-    # Поиск обновляемого блюда.
-    item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Блюдо не найдено")
+    repository = create_menu_repository(db)
+    service = MenuService(repository)
 
-    # Техническая валидация нового значения цены.
+    # Сначала существование блюда, затем формат новой цены — как в MVP.
+    try:
+        service.ensure_item_exists(item_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     if payload.price is not None and payload.price <= 0:
         raise HTTPException(
             status_code=400,
             detail="Цена должна быть положительной",
         )
 
-    # Применение изменений.
-    if payload.name is not None:
-        item.name = payload.name
-    if payload.price is not None:
-        item.price = payload.price
-    if payload.is_available is not None:
-        item.is_available = payload.is_available
+    try:
+        saved_id = service.update_item(
+            item_id,
+            payload.name,
+            payload.price,
+            payload.is_available,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    db.add(item)
-    db.commit()
-    db.refresh(item)
-
-    return {"status": "success", "item_id": item.id}
+    return {"status": "success", "item_id": saved_id}

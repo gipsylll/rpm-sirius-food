@@ -1,0 +1,14 @@
+[project]
+name = "rpm"
+version = "0.1.0"
+description = "Сириус.Еда — API столовой в архитектуре модульного монолита"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.110.0",
+    "uvicorn[standard]==0.29.0",
+    "sqlalchemy==2.0.29",
+    "psycopg2-binary==2.9.10",
+    "pydantic[email]==2.10.6",
+    "python-dotenv==1.0.1",
+]

@@ -59,6 +59,8 @@ uvicorn app.main:app --reload
 
 Документация: http://127.0.0.1:8000/docs
 
+В логе сервера видны SQL-запросы `INSERT` и `UPDATE`: у движка включён `echo`.
+
 Тесты без Docker и PostgreSQL:
 
 ```bash

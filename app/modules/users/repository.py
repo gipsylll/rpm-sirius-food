@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.models import User
+from app.models import Role, User
 
 
 @dataclass
@@ -20,6 +20,8 @@ class UserRecord:
     phone: str | None
     balance: float = 0.0
     is_blocked: bool = False
+    password_hash: str | None = None
+    role: str = "student"
 
 
 class UserRepository(ABC):
@@ -34,7 +36,13 @@ class UserRepository(ABC):
         """Поиск пользователя по идентификатору."""
 
     @abstractmethod
-    def save_user(self, email: str, phone: str | None) -> tuple[int, str]:
+    def save_user(
+        self,
+        email: str,
+        phone: str | None,
+        password_hash: str | None = None,
+        role: str = "student",
+    ) -> tuple[int, str]:
         """Создание пользователя с нулевым балансом. Возвращает id и email."""
 
     @abstractmethod
@@ -54,12 +62,30 @@ class SqlAlchemyUserRepository(UserRepository):
     def get_by_id(self, user_id: int):
         return self.db.query(User).filter(User.id == user_id).first()
 
-    def save_user(self, email: str, phone: str | None) -> tuple[int, str]:
+    def _get_or_create_role(self, role_name: str) -> Role:
+        role = self.db.query(Role).filter(Role.name == role_name).first()
+        if not role:
+            role = Role(name=role_name)
+            self.db.add(role)
+            self.db.commit()
+            self.db.refresh(role)
+        return role
+
+    def save_user(
+        self,
+        email: str,
+        phone: str | None,
+        password_hash: str | None = None,
+        role: str = "student",
+    ) -> tuple[int, str]:
+        role_obj = self._get_or_create_role(role)
         new_user = User(
             email=email,
             phone=phone,
             balance=0.0,
             is_blocked=False,
+            password_hash=password_hash,
+            role_id=role_obj.id,
         )
         self.db.add(new_user)
         self.db.commit()
@@ -89,7 +115,13 @@ class InMemoryUserRepository(UserRepository):
     def get_by_id(self, user_id: int):
         return self.users.get(user_id)
 
-    def save_user(self, email: str, phone: str | None) -> tuple[int, str]:
+    def save_user(
+        self,
+        email: str,
+        phone: str | None,
+        password_hash: str | None = None,
+        role: str = "student",
+    ) -> tuple[int, str]:
         user_id = self._next_id
         self._next_id += 1
         self.users[user_id] = UserRecord(
@@ -98,6 +130,8 @@ class InMemoryUserRepository(UserRepository):
             phone=phone,
             balance=0.0,
             is_blocked=False,
+            password_hash=password_hash,
+            role=role,
         )
         return user_id, email
 

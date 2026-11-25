@@ -1,0 +1,16 @@
+.git
+.env
+.local-sentry
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.DS_Store
+reports
+*.docx
+mutants
+.reports
+.playwright-cli
+sirius-food-frontend/node_modules
+sirius-food-frontend/.next

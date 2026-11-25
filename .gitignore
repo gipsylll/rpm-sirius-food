@@ -1,4 +1,8 @@
+# System files
+.DS_Store
+
 # Python-generated files
+
 __pycache__/
 *.py[oc]
 build/
@@ -9,5 +13,15 @@ wheels/
 # Virtual environments
 .venv
 
+# Environment & Secrets
+.env
+
 # Tests
 .pytest_cache/
+
+.reports/
+mutants/
+.ruff_cache
+.playwright-cli
+.kilo
+.local-sentry/

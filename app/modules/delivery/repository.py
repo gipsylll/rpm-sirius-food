@@ -8,10 +8,12 @@
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.models import Delivery, Order, User
+from app.modules.orders.websocket import publish_order_update
 
 
 @dataclass
@@ -58,8 +60,20 @@ class DeliveryRepository(ABC):
         """Поиск доставки по идентификатору."""
 
     @abstractmethod
+    def track_delivery(self, delivery_id: int):
+        """Потоковый трекинг смены статусов доставки."""
+
+    @abstractmethod
     def mark_completed(self, delivery) -> None:
         """Завершение доставки и перевод связанного заказа в delivered."""
+
+    @abstractmethod
+    def update_status(self, delivery, status: str) -> None:
+        """Сохранение промежуточного статуса доставки."""
+
+    @abstractmethod
+    def get_courier_deliveries(self, courier_id: int) -> list:
+        """Список доставок конкретного курьера."""
 
 
 class SqlAlchemyDeliveryRepository(DeliveryRepository):
@@ -79,7 +93,7 @@ class SqlAlchemyDeliveryRepository(DeliveryRepository):
             self.db.query(Delivery)
             .filter(
                 Delivery.courier_id == courier_id,
-                Delivery.status == "in_progress",
+                Delivery.status.in_(["in_progress", "assigned", "picked_up", "in_transit", "arrived"]),
             )
             .first()
         )
@@ -93,6 +107,7 @@ class SqlAlchemyDeliveryRepository(DeliveryRepository):
         self.db.add(new_delivery)
         self.db.commit()
         self.db.refresh(new_delivery)
+        publish_order_update(order_id, "assigned", "assigned")
         return new_delivery.id
 
     def get_delivery(self, delivery_id: int):
@@ -106,6 +121,36 @@ class SqlAlchemyDeliveryRepository(DeliveryRepository):
             self.db.add(order)
         self.db.add(delivery)
         self.db.commit()
+        publish_order_update(delivery.order_id, "delivered", "delivered")
+
+    def update_status(self, delivery, status: str) -> None:
+        delivery.status = status
+        order = self.db.query(Order).filter(Order.id == delivery.order_id).first()
+        if order:
+            order.status = status
+            self.db.add(order)
+        self.db.add(delivery)
+        self.db.commit()
+        publish_order_update(delivery.order_id, status, status)
+
+    def get_courier_deliveries(self, courier_id: int) -> list:
+        return self.db.query(Delivery).filter(Delivery.courier_id == courier_id).all()
+
+    def track_delivery(self, delivery_id: int):
+        stages = [
+            ("in_progress", "Курьер назначен на заказ"),
+            ("picked_up", "Курьер забрал горячий заказ со столовой"),
+            ("in_transit", "Курьер в пути к адресу доставки"),
+            ("arrived", "Курьер прибыл к зданию"),
+            ("delivered", "Заказ успешно вручен клиенту"),
+        ]
+        for status, desc in stages:
+            yield {
+                "delivery_id": delivery_id,
+                "status": status,
+                "description": desc,
+                "timestamp": "2026-10-23T12:00:00Z",
+            }
 
 
 class InMemoryDeliveryRepository(DeliveryRepository):
@@ -125,7 +170,7 @@ class InMemoryDeliveryRepository(DeliveryRepository):
 
     def get_active_delivery(self, courier_id: int):
         for delivery in self.deliveries.values():
-            if delivery.courier_id == courier_id and delivery.status == "in_progress":
+            if delivery.courier_id == courier_id and delivery.status in ("in_progress", "assigned", "picked_up", "in_transit", "arrived"):
                 return delivery
         return None
 
@@ -138,6 +183,7 @@ class InMemoryDeliveryRepository(DeliveryRepository):
             courier_id=courier_id,
             status="in_progress",
         )
+        publish_order_update(order_id, "assigned", "assigned")
         return delivery_id
 
     def get_delivery(self, delivery_id: int):
@@ -149,6 +195,94 @@ class InMemoryDeliveryRepository(DeliveryRepository):
         if order:
             order.status = "delivered"
 
+    def get_courier_deliveries(self, courier_id: int) -> list:
+        return [d for d in self.deliveries.values() if d.courier_id == courier_id]
+
+    def update_status(self, delivery, status: str) -> None:
+        delivery.status = status
+        order = self.orders.get(delivery.order_id)
+        if order:
+            order.status = status
+        publish_order_update(delivery.order_id, status, status)
+
+    def track_delivery(self, delivery_id: int):
+        stages = [
+            ("in_progress", "Курьер назначен на заказ"),
+            ("picked_up", "Курьер забрал горячий заказ со столовой"),
+            ("in_transit", "Курьер в пути к адресу доставки"),
+            ("arrived", "Курьер прибыл к зданию"),
+            ("delivered", "Заказ успешно вручен клиенту"),
+        ]
+        for status, desc in stages:
+            yield {
+                "delivery_id": delivery_id,
+                "status": status,
+                "description": desc,
+                "timestamp": "2026-10-23T12:00:00Z",
+            }
+
+
+class GrpcDeliveryRepository(DeliveryRepository):
+    """
+    Инфраструктурный адаптер к микросервису доставки по протоколу gRPC.
+    Паттерн Strangler Fig: монолит делегирует операции сохранения и завершения
+    доставки внешнему микросервису delivery_server.py.
+    """
+
+    def __init__(self, db: Session, client: Any | None = None):
+        self.db = db
+        if client is None:
+            from app.modules.delivery.grpc_client import DeliveryGrpcClient
+
+            self.client = DeliveryGrpcClient()
+        else:
+            self.client = client
+
+    def get_order(self, order_id: int):
+        return self.db.query(Order).filter(Order.id == order_id).first()
+
+    def get_user(self, user_id: int):
+        return self.db.query(User).filter(User.id == user_id).first()
+
+    def get_active_delivery(self, courier_id: int):
+        return (
+            self.db.query(Delivery)
+            .filter(
+                Delivery.courier_id == courier_id,
+                Delivery.status == "in_progress",
+            )
+            .first()
+        )
+
+    def save_delivery(self, order_id: int, courier_id: int) -> int:
+        """Делегирует создание доставки gRPC микросервису."""
+        response = self.client.assign_courier(order_id, courier_id)
+        return response["delivery_id"]
+
+    def get_delivery(self, delivery_id: int):
+        return self.db.query(Delivery).filter(Delivery.id == delivery_id).first()
+
+    def mark_completed(self, delivery) -> None:
+        """Делегирует завершение доставки gRPC микросервису."""
+        self.client.complete_delivery(delivery.id)
+
+    def update_status(self, delivery, status: str) -> None:
+        # The gRPC adapter may be upgraded independently; keep the local read model
+        # in sync and publish the cross-replica event here.
+        delivery.status = status
+        order = self.db.query(Order).filter(Order.id == delivery.order_id).first()
+        if order:
+            order.status = status
+        self.db.commit()
+        publish_order_update(delivery.order_id, status, status)
+
+    def get_courier_deliveries(self, courier_id: int) -> list:
+        return self.db.query(Delivery).filter(Delivery.courier_id == courier_id).all()
+
+    def track_delivery(self, delivery_id: int):
+        """Делегирует Server Streaming микросервису gRPC."""
+        return self.client.track_delivery(delivery_id)
+
 
 _memory_repository: InMemoryDeliveryRepository | None = None
 
@@ -158,13 +292,17 @@ def create_delivery_repository(db: Session | None = None) -> DeliveryRepository:
     Точка подмены реализации.
 
     REPOSITORY_BACKEND=memory подключает общее in-memory-хранилище.
-    Иначе используется PostgreSQL. service.py и router.py при этом не меняются.
+    REPOSITORY_BACKEND=grpc подключает gRPC-клиент (паттерн Strangler Fig).
+    Иначе используется PostgreSQL (SqlAlchemy).
     """
     global _memory_repository
-    if os.getenv("REPOSITORY_BACKEND", "sqlalchemy") == "memory":
+    backend = os.getenv("REPOSITORY_BACKEND", "sqlalchemy")
+    if backend == "memory":
         if _memory_repository is None:
             _memory_repository = InMemoryDeliveryRepository()
         return _memory_repository
     if db is None:
-        raise ValueError("Для SQL-репозитория нужна сессия базы данных")
+        raise ValueError("Для репозитория нужна сессия базы данных")
+    if backend == "grpc":
+        return GrpcDeliveryRepository(db)
     return SqlAlchemyDeliveryRepository(db)

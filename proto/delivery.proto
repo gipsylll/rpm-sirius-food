@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package delivery;
+
+// Описание сервиса доставки «Сириус.Еда».
+service DeliveryService {
+  // Назначение курьера на заказ.
+  rpc AssignCourier(AssignCourierRequest) returns (AssignCourierResponse);
+
+  // Завершение доставки.
+  rpc CompleteDelivery(CompleteDeliveryRequest) returns (CompleteDeliveryResponse);
+
+  // Получение информации о доставке.
+  rpc GetDelivery(GetDeliveryRequest) returns (GetDeliveryResponse);
+
+  // Server Streaming (9 баллов): непрерывная трансляция статусов доставки клиенту.
+  rpc TrackDelivery(TrackDeliveryRequest) returns (stream DeliveryStatus);
+
+  // Bidirectional Streaming (10 баллов): двусторонний обмен сообщениями между клиентом и курьером.
+  rpc ChatWithCourier(stream ChatMessage) returns (stream ChatMessage);
+}
+
+// --- Сообщения для AssignCourier ---
+message AssignCourierRequest {
+  int32 order_id = 1;
+  int32 courier_id = 2;
+}
+
+message AssignCourierResponse {
+  int32 delivery_id = 1;
+  string status = 2;
+}
+
+// --- Сообщения для CompleteDelivery ---
+message CompleteDeliveryRequest {
+  int32 delivery_id = 1;
+}
+
+message CompleteDeliveryResponse {
+  string status = 1;
+}
+
+// --- Сообщения для GetDelivery ---
+message GetDeliveryRequest {
+  int32 order_id = 1;
+}
+
+message GetDeliveryResponse {
+  int32 id = 1;
+  string status = 2;
+  int32 courier_id = 3;
+}
+
+// --- Сообщения для Server Streaming TrackDelivery (9 баллов) ---
+message TrackDeliveryRequest {
+  int32 delivery_id = 1;
+}
+
+message DeliveryStatus {
+  int32 delivery_id = 1;
+  string status = 2;
+  string description = 3;
+  string timestamp = 4;
+}
+
+// --- Сообщения для Bidirectional Streaming ChatWithCourier (10 баллов) ---
+message ChatMessage {
+  int32 delivery_id = 1;
+  string sender_role = 2; // "customer" или "courier"
+  string message = 3;
+  string timestamp = 4;
+}

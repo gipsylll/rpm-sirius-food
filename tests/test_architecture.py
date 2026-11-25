@@ -1,23 +1,28 @@
 from pathlib import Path
 
+import app.modules.auth.repository as auth_repository
 import app.modules.delivery.repository as delivery_repository
 import app.modules.menu.repository as menu_repository
 import app.modules.orders.repository as orders_repository
 import app.modules.users.repository as users_repository
 
-MODULES = ("orders", "users", "menu", "delivery")
+MODULES = ("orders", "users", "menu", "delivery", "auth")
 
 
 def test_services_do_not_import_frameworks():
+    """Бизнес-логика Clean Architecture не должна зависеть от веб-фреймворков и СУБД/кешей."""
     root = Path(__file__).resolve().parents[1] / "app" / "modules"
     for name in MODULES:
         source = (root / name / "service.py").read_text(encoding="utf-8")
-        assert "fastapi" not in source
-        assert "sqlalchemy" not in source
+        assert "fastapi" not in source, f"{name}/service.py импортирует fastapi"
+        assert "sqlalchemy" not in source, f"{name}/service.py импортирует sqlalchemy"
+        assert "redis" not in source, f"{name}/service.py импортирует redis"
 
 
 def test_factory_swaps_backend_without_touching_service(monkeypatch):
+    """Фабрики репозиториев позволяют переключать in-memory и sql без изменения сервисов."""
     modules = (
+        auth_repository,
         orders_repository,
         users_repository,
         menu_repository,

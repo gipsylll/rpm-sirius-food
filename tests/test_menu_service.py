@@ -31,7 +31,9 @@ def test_create_item_rejects_duplicate_name():
 
 def test_update_item_changes_only_given_fields():
     repository = InMemoryMenuRepository()
-    repository.items[3] = MenuItemRecord(id=3, name="Борщ", price=40.0, is_available=True)
+    repository.items[3] = MenuItemRecord(
+        id=3, name="Борщ", price=40.0, is_available=True
+    )
     service = MenuService(repository)
 
     saved_id = service.update_item(3, name=None, price=55.0, is_available=False)
